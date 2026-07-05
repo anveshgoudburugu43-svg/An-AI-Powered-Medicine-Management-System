@@ -1,0 +1,710 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
+import { Calendar, AlertTriangle, Clock, Package, Edit, Eye, Filter, X, Check, Trash2, ArrowLeft, Save, Plus, Brain, TrendingUp, RefreshCw } from 'lucide-react';
+import Link from 'next/link';
+import AnimatedList from '../components/AnimatedList';
+
+interface Medicine {
+  id: string;
+  name: string;
+  description: string;
+  dosage: string;
+  manufacturer: string;
+  expiry_date: string;
+  quantity: number;
+  image_url: string;
+  created_at: string;
+  status?: 'active' | 'sold_out' | 'expired' | 'removed';
+}
+
+interface RestockRecommendation {
+  medicine_name: string;
+  ndc_code: string;
+  current_stock: number;
+  suggested_reorder: number;
+  urgency: 'low' | 'medium' | 'high' | 'critical';
+  reasoning: string;
+  confidence: number;
+}
+
+export default function TrackingPage() {
+  const { data: session } = useSession();
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
+  const [filteredMedicines, setFilteredMedicines] = useState<Medicine[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<Medicine>>({});
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [activeTab, setActiveTab] = useState<'expiration' | 'restock'>('expiration');
+  const [restockRecommendations, setRestockRecommendations] = useState<RestockRecommendation[]>([]);
+  const [loadingRestock, setLoadingRestock] = useState(false);
+  const [filters, setFilters] = useState({
+    manufacturer: '',
+    status: '',
+    expiryRange: '',
+    search: ''
+  });
+
+  useEffect(() => {
+    fetchMedicines();
+    fetchStoredRecommendations();
+  }, []);
+
+  useEffect(() => {
+    applyFilters();
+  }, [medicines, filters]);
+
+  const fetchMedicines = async () => {
+    try {
+      const response = await fetch('/api/medicine');
+      if (response.ok) {
+        const data = await response.json();
+        const medicinesWithStatus = data.map((med: Medicine) => ({
+          ...med,
+          status: med.status || 'active'
+        }));
+        setMedicines(medicinesWithStatus);
+      }
+    } catch (error) {
+      console.error('Error fetching medicines:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyFilters = () => {
+    let filtered = medicines;
+
+    if (filters.search) {
+      filtered = filtered.filter(med => 
+        med.name.toLowerCase().includes(filters.search.toLowerCase()) ||
+        med.manufacturer.toLowerCase().includes(filters.search.toLowerCase())
+      );
+    }
+
+    if (filters.manufacturer) {
+      filtered = filtered.filter(med => 
+        med.manufacturer.toLowerCase().includes(filters.manufacturer.toLowerCase())
+      );
+    }
+
+    if (filters.status) {
+      filtered = filtered.filter(med => med.status === filters.status);
+    }
+
+    if (filters.expiryRange) {
+      const today = new Date();
+      filtered = filtered.filter(med => {
+        const expiryDate = new Date(med.expiry_date);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        
+        switch (filters.expiryRange) {
+          case 'expired':
+            return daysUntilExpiry < 0;
+          case 'week':
+            return daysUntilExpiry >= 0 && daysUntilExpiry <= 7;
+          case 'month':
+            return daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+          case 'future':
+            return daysUntilExpiry > 30;
+          default:
+            return true;
+        }
+      });
+    }
+
+    setFilteredMedicines(filtered);
+  };
+
+  const getDaysUntilExpiry = (expiryDate: string) => {
+    const today = new Date();
+    const expiry = new Date(expiryDate);
+    const diffTime = expiry.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  const getExpiryStatus = (expiryDate: string) => {
+    const daysUntilExpiry = getDaysUntilExpiry(expiryDate);
+    
+    if (daysUntilExpiry < 0) {
+      return { status: 'expired', color: 'text-red-500', bgColor: 'bg-red-500/20' };
+    } else if (daysUntilExpiry <= 7) {
+      return { status: 'expiring-soon', color: 'text-yellow-500', bgColor: 'bg-yellow-500/20' };
+    } else if (daysUntilExpiry <= 30) {
+      return { status: 'warning', color: 'text-orange-500', bgColor: 'bg-orange-500/20' };
+    } else {
+      return { status: 'good', color: 'text-green-500', bgColor: 'bg-green-500/20' };
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  const getStatusColor = (status: Medicine['status']) => {
+    switch (status) {
+      case 'active':
+        return 'text-green-500';
+      case 'sold_out':
+        return 'text-yellow-500';
+      case 'expired':
+        return 'text-red-500';
+      case 'removed':
+        return 'text-gray-500';
+      default:
+        return 'text-gray-400';
+    }
+  };
+
+  const getStatusBadge = (status: Medicine['status']) => {
+    const colors = {
+      active: 'bg-green-500/20 text-green-400',
+      sold_out: 'bg-yellow-500/20 text-yellow-400',
+      expired: 'bg-red-500/20 text-red-400',
+      removed: 'bg-gray-500/20 text-gray-400'
+    };
+    
+    return (
+      <span className={`px-2 py-1 rounded text-xs ${colors[status || 'active']}`}>
+        {status?.replace('_', ' ').toUpperCase() || 'ACTIVE'}
+      </span>
+    );
+  };
+
+  const startEditing = (medicine: Medicine) => {
+    setEditingId(medicine.id);
+    setEditForm({
+      name: medicine.name,
+      description: medicine.description,
+      dosage: medicine.dosage,
+      manufacturer: medicine.manufacturer,
+      expiry_date: medicine.expiry_date,
+      quantity: medicine.quantity,
+      status: medicine.status
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+
+    try {
+      const response = await fetch(`/api/medicine/${editingId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(editForm),
+      });
+
+      if (response.ok) {
+        setMedicines(prev => prev.map(med => 
+          med.id === editingId ? { ...med, ...editForm } : med
+        ));
+        setEditingId(null);
+        setEditForm({});
+      }
+    } catch (error) {
+      console.error('Error updating medicine:', error);
+    }
+  };
+
+  const deleteMedicine = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this medicine?')) return;
+
+    try {
+      const response = await fetch(`/api/medicine/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setMedicines(prev => prev.filter(med => med.id !== id));
+      }
+    } catch (error) {
+      console.error('Error deleting medicine:', error);
+    }
+  };
+
+  const fetchStoredRecommendations = async () => {
+    try {
+      const response = await fetch('/api/restock-suggestions');
+      if (response.ok) {
+        const data = await response.json();
+        setRestockRecommendations(data.recommendations || []);
+      }
+    } catch (error) {
+      console.error('Error fetching stored recommendations:', error);
+    }
+  };
+
+  const generateRestockRecommendations = async () => {
+    setLoadingRestock(true);
+    try {
+      const response = await fetch('/api/restock-suggestions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRestockRecommendations(data.recommendations || []);
+      } else {
+        console.error('Failed to generate restock recommendations');
+      }
+    } catch (error) {
+      console.error('Error generating restock recommendations:', error);
+    } finally {
+      setLoadingRestock(false);
+    }
+  };
+
+  const getUrgencyColor = (urgency: string) => {
+    switch (urgency) {
+      case 'critical':
+        return 'text-red-500 bg-red-500/20';
+      case 'high':
+        return 'text-orange-500 bg-orange-500/20';
+      case 'medium':
+        return 'text-yellow-500 bg-yellow-500/20';
+      case 'low':
+        return 'text-green-500 bg-green-500/20';
+      default:
+        return 'text-gray-500 bg-gray-500/20';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-[#1f1b2c] min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#41cbe2]"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-[#1f1b2c] min-h-screen">
+      {/* Header */}
+      <div className="bg-[#171f34] border-b border-[rgba(255,255,255,0.2)] px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Link href="/dashboard" className="text-[#41cbe2] hover:text-white transition-colors">
+              <ArrowLeft size={20} />
+            </Link>
+            <h1 className="text-white text-xl font-semibold flex items-center space-x-2">
+              <TrendingUp size={24} />
+              <span>Medicine Tracking</span>
+            </h1>
+          </div>
+          <div className="flex items-center space-x-4">
+            {activeTab === 'expiration' && (
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`px-3 py-2 rounded transition-colors flex items-center space-x-2 ${
+                  showFilters ? 'bg-[#41cbe2] text-white' : 'text-[#41cbe2] hover:bg-[rgba(65,203,226,0.1)]'
+                }`}
+              >
+                <Filter size={16} />
+                <span>Filters</span>
+              </button>
+            )}
+            {activeTab === 'restock' && (
+              <button
+                onClick={generateRestockRecommendations}
+                disabled={loadingRestock}
+                className="px-3 py-2 rounded transition-colors flex items-center space-x-2 bg-[#41cbe2] hover:bg-[#35a8c0] text-white disabled:opacity-50"
+              >
+                {loadingRestock ? (
+                  <RefreshCw size={16} className="animate-spin" />
+                ) : (
+                  <Brain size={16} />
+                )}
+                <span>{loadingRestock ? 'Generating...' : 'Generate AI Recommendations'}</span>
+              </button>
+            )}
+            <div className="text-[rgba(255,255,255,0.75)] text-sm">
+              {activeTab === 'expiration' 
+                ? `${filteredMedicines.length} of ${medicines.length} medicines`
+                : `${restockRecommendations.length} recommendations`
+              }
+            </div>
+          </div>
+        </div>
+        
+        {/* Tabs */}
+        <div className="flex space-x-1 mt-4">
+          <button
+            onClick={() => setActiveTab('expiration')}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+              activeTab === 'expiration' 
+                ? 'bg-[#41cbe2] text-white' 
+                : 'text-[rgba(255,255,255,0.75)] hover:bg-[rgba(255,255,255,0.1)]'
+            }`}
+          >
+            <Clock size={16} />
+            <span>Expiration Tracking</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('restock')}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+              activeTab === 'restock' 
+                ? 'bg-[#41cbe2] text-white' 
+                : 'text-[rgba(255,255,255,0.75)] hover:bg-[rgba(255,255,255,0.1)]'
+            }`}
+          >
+            <Brain size={16} />
+            <span>AI Restock Recommendations</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6">
+        {/* Filters */}
+        {showFilters && activeTab === 'expiration' && (
+          <div className="mb-6 p-4 bg-[#171f34] rounded-lg border border-[rgba(255,255,255,0.2)]">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <input
+                type="text"
+                placeholder="Search medicines..."
+                value={filters.search}
+                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                className="bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white placeholder-gray-400"
+              />
+              <input
+                type="text"
+                placeholder="Filter by manufacturer..."
+                value={filters.manufacturer}
+                onChange={(e) => setFilters(prev => ({ ...prev, manufacturer: e.target.value }))}
+                className="bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white placeholder-gray-400"
+              />
+              <select
+                value={filters.status}
+                onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                className="bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+              >
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="sold_out">Sold Out</option>
+                <option value="expired">Expired</option>
+                <option value="removed">Removed</option>
+              </select>
+              <select
+                value={filters.expiryRange}
+                onChange={(e) => setFilters(prev => ({ ...prev, expiryRange: e.target.value }))}
+                className="bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+              >
+                <option value="">All Expiry Dates</option>
+                <option value="expired">Already Expired</option>
+                <option value="week">Expires This Week</option>
+                <option value="month">Expires This Month</option>
+                <option value="future">Future Expiry</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Content based on active tab */}
+        {activeTab === 'expiration' ? (
+          /* Medicine Grid */
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredMedicines.length === 0 ? (
+            <div className="col-span-full text-center py-12">
+              <Package className="mx-auto text-gray-500 mb-4" size={48} />
+              <p className="text-gray-400 text-lg">
+                {medicines.length === 0 ? 'No medicines added yet' : 'No medicines match your filters'}
+              </p>
+            </div>
+          ) : (
+            filteredMedicines.map((medicine) => {
+              const expiryStatus = getExpiryStatus(medicine.expiry_date);
+              const daysUntilExpiry = getDaysUntilExpiry(medicine.expiry_date);
+              const isEditing = editingId === medicine.id;
+              const isViewing = viewingId === medicine.id;
+
+              return (
+                <div
+                  key={medicine.id}
+                  className={`bg-[#171f34] border border-[rgba(255,255,255,0.2)] rounded-lg p-6 ${expiryStatus.bgColor}`}
+                >
+                  {isEditing ? (
+                    // Edit Form
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-white font-semibold">Edit Medicine</h3>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={saveEdit}
+                            className="text-green-400 hover:text-green-300"
+                          >
+                            <Save size={16} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingId(null);
+                              setEditForm({});
+                            }}
+                            className="text-gray-400 hover:text-white"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <input
+                        type="text"
+                        value={editForm.name || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                        placeholder="Medicine name"
+                      />
+                      
+                      <input
+                        type="text"
+                        value={editForm.dosage || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, dosage: e.target.value }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                        placeholder="Dosage"
+                      />
+                      
+                      <input
+                        type="text"
+                        value={editForm.manufacturer || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, manufacturer: e.target.value }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                        placeholder="Manufacturer"
+                      />
+                      
+                      <input
+                        type="date"
+                        value={editForm.expiry_date || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, expiry_date: e.target.value }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                      />
+                      
+                      <input
+                        type="number"
+                        value={editForm.quantity || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, quantity: parseInt(e.target.value) }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                        placeholder="Quantity"
+                      />
+                      
+                      <select
+                        value={editForm.status || 'active'}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as Medicine['status'] }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                      >
+                        <option value="active">Active</option>
+                        <option value="sold_out">Sold Out</option>
+                        <option value="expired">Expired</option>
+                        <option value="removed">Removed</option>
+                      </select>
+                      
+                      <textarea
+                        value={editForm.description || ''}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full bg-[rgba(255,255,255,0.1)] border border-[rgba(255,255,255,0.2)] rounded px-3 py-2 text-white"
+                        placeholder="Description"
+                        rows={3}
+                      />
+                    </div>
+                  ) : (
+                    // View Mode
+                    <div>
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <h3 className="text-white font-semibold text-lg">{medicine.name}</h3>
+                            {daysUntilExpiry < 0 && (
+                              <AlertTriangle className="text-red-500" size={16} />
+                            )}
+                            {daysUntilExpiry <= 7 && daysUntilExpiry >= 0 && (
+                              <AlertTriangle className="text-yellow-500" size={16} />
+                            )}
+                          </div>
+                          {getStatusBadge(medicine.status)}
+                        </div>
+                        
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => setViewingId(isViewing ? null : medicine.id)}
+                            className="text-blue-400 hover:text-blue-300 transition-colors"
+                            title="View details"
+                          >
+                            <Eye size={16} />
+                          </button>
+                          <button
+                            onClick={() => startEditing(medicine)}
+                            className="text-yellow-400 hover:text-yellow-300 transition-colors"
+                            title="Edit medicine"
+                          >
+                            <Edit size={16} />
+                          </button>
+                          <button
+                            onClick={() => deleteMedicine(medicine.id)}
+                            className="text-red-400 hover:text-red-300 transition-colors"
+                            title="Delete medicine"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {medicine.image_url && (
+                        <img
+                          src={medicine.image_url}
+                          alt={medicine.name}
+                          className="w-full h-32 object-cover rounded mb-4"
+                        />
+                      )}
+
+                      <div className="space-y-2 text-sm">
+                        {medicine.dosage && (
+                          <p className="text-gray-300">
+                            <span className="text-gray-400">Dosage:</span> {medicine.dosage}
+                          </p>
+                        )}
+                        
+                        <div className="flex items-center space-x-1">
+                          <Calendar size={14} className={expiryStatus.color} />
+                          <span className={expiryStatus.color}>
+                            Expires: {formatDate(medicine.expiry_date)}
+                          </span>
+                        </div>
+                        
+                        <p className="text-gray-300">
+                          <span className="text-gray-400">Quantity:</span> {medicine.quantity}
+                        </p>
+                        
+                        <div className={`text-sm ${expiryStatus.color}`}>
+                          {daysUntilExpiry < 0 
+                            ? `Expired ${Math.abs(daysUntilExpiry)} days ago`
+                            : daysUntilExpiry === 0
+                            ? 'Expires today'
+                            : daysUntilExpiry === 1
+                            ? 'Expires tomorrow'
+                            : `Expires in ${daysUntilExpiry} days`
+                          }
+                        </div>
+
+                        {/* Detailed view */}
+                        {isViewing && (
+                          <div className="mt-4 p-3 bg-[rgba(255,255,255,0.05)] rounded">
+                            <div className="space-y-2">
+                              {medicine.manufacturer && (
+                                <p className="text-gray-300">
+                                  <span className="text-gray-400">Manufacturer:</span> {medicine.manufacturer}
+                                </p>
+                              )}
+                              <p className="text-gray-300">
+                                <span className="text-gray-400">Added:</span> {formatDate(medicine.created_at)}
+                              </p>
+                              {medicine.description && (
+                                <p className="text-gray-300">
+                                  <span className="text-gray-400">Description:</span> {medicine.description}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+          </div>
+        ) : (
+          /* Restock Recommendations */
+          <div className="space-y-6">
+            {loadingRestock ? (
+              <div className="text-center py-12">
+                <RefreshCw className="mx-auto text-[#41cbe2] mb-4 animate-spin" size={48} />
+                <p className="text-gray-400 text-lg">Generating AI-powered restock recommendations...</p>
+                <p className="text-gray-500 text-sm mt-2">Analyzing prescription patterns and inventory levels</p>
+              </div>
+            ) : restockRecommendations.length === 0 ? (
+              <div className="text-center py-12">
+                <Brain className="mx-auto text-gray-500 mb-4" size={48} />
+                <p className="text-gray-400 text-lg mb-4">No restock recommendations available</p>
+                <button
+                  onClick={generateRestockRecommendations}
+                  className="px-6 py-3 bg-[#41cbe2] hover:bg-[#35a8c0] text-white rounded-lg transition-colors flex items-center space-x-2 mx-auto"
+                >
+                  <Brain size={20} />
+                  <span>Generate AI Recommendations</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {restockRecommendations.map((rec, index) => (
+                  <div
+                    key={index}
+                    className="bg-[#171f34] border border-[rgba(255,255,255,0.2)] rounded-lg p-6"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex-1">
+                        <h3 className="text-white font-semibold text-lg mb-2">{rec.medicine_name}</h3>
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${getUrgencyColor(rec.urgency)}`}>
+                            {rec.urgency.toUpperCase()} PRIORITY
+                          </span>
+                          <span className="text-gray-400 text-sm">
+                            {Math.round(rec.confidence * 100)}% confidence
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 mb-4">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-400">Current Stock:</span>
+                        <span className="text-white font-medium">{rec.current_stock} units</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-400">Suggested Reorder:</span>
+                        <span className="text-[#41cbe2] font-bold text-lg">{rec.suggested_reorder} units</span>
+                      </div>
+                      {rec.ndc_code && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-400">NDC Code:</span>
+                          <span className="text-white font-mono text-sm">{rec.ndc_code}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-[rgba(255,255,255,0.05)] rounded-lg p-4">
+                      <h4 className="text-white font-medium mb-2 flex items-center space-x-2">
+                        <AlertTriangle size={16} className="text-[#41cbe2]" />
+                        <span>AI Analysis</span>
+                      </h4>
+                      <p className="text-gray-300 text-sm leading-relaxed">{rec.reasoning}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Floating Action Button */}
+      <Link
+        href="/dashboard"
+        className="fixed bottom-6 right-6 bg-[#049eb8] hover:bg-[#41cbe2] text-white p-4 rounded-full shadow-lg transition-colors flex items-center justify-center"
+        title="Add Medicine"
+      >
+        <Plus size={24} />
+      </Link>
+    </div>
+  );
+}
